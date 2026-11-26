@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.forge.fixtureprovider" android:versionCode="1" android:versionName="1">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="33"/>
+    <application android:testOnly="true" android:debuggable="true" android:allowBackup="false"
+        android:label="Forge Fixtures" android:icon="@android:drawable/ic_menu_agenda">
+        <provider android:name=".Fixtures" android:authorities="dev.forge.fixtureprovider.documents"
+            android:permission="android.permission.MANAGE_DOCUMENTS" android:exported="true"
+            android:grantUriPermissions="true">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER"/></intent-filter>
+        </provider>
+    </application>
+</manifest>

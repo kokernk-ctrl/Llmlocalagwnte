@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">FORGE AI</string>
+    <style name="Theme.Forge" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#111215</item>
+        <item name="android:statusBarColor">#111215</item>
+        <item name="android:navigationBarColor">#111215</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
