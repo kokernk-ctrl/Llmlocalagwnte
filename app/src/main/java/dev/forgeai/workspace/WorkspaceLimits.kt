@@ -8,10 +8,22 @@ import java.util.Locale
 
 internal const val MAX_ROWS = 50
 internal const val MAX_BYTES = 8192
-internal const val MAX_LOG = 32
+internal const val MAX_LOG = 64
 internal const val MAX_QUERY = 128
 
+// Agent tool budget constants.
+internal const val AGENT_MAX_FILES = 2000
+internal const val AGENT_MAX_PATH = 512
+internal const val READ_LIMIT = 1024 * 1024
+internal const val WRITE_LIMIT = 1024 * 1024
+internal const val MAX_BACKUP_BYTES = 1024 * 1024
+
 internal data class Preview(val text: String, val clipped: Boolean)
+
+/** Cleans provider-supplied display names before they reach the UI or the audit log. */
+internal fun safeName(name: String) = name.take(120).filterNot {
+    it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt()
+}
 
 private val textExtensions = setOf("txt", "md", "csv", "log", "json", "yaml", "yml",
     "kt", "kts", "java", "py", "js", "ts", "jsx", "tsx", "html", "css", "xml", "c", "cpp",
@@ -67,16 +79,19 @@ internal fun literalMatches(text: String, query: String): Int {
 }
 
 internal enum class WorkspaceEvent(val label: String) {
-    GRANT("Read access granted"), LIST("Listed top-level entries"), READ("Opened a text preview"),
-    SEARCH("Searched a preview"), COPY("Copied a preview excerpt"), DRAFT("Shared an excerpt to a chat draft"),
-    REVOKE("Read access revoked"),
+    GRANT("Read access granted"), GRANT_WRITE("Read+write access granted"),
+    LIST("Listed folder entries"), READ("Opened a file"),
+    SEARCH("Searched file content"), COPY("Copied an excerpt"), DRAFT("Shared an excerpt to a chat draft"),
+    REVOKE("Access revoked"),
+    WRITE_CREATE("Created a file"), WRITE_REPLACE("Modified a file"), CONFLICT("Concurrent change detected"),
+    EXPORT("Exported a copy"), SHELL("Ran a local command"), CHECK("Ran a local check"),
     FAILED("Operation unsuccessful")
 }
 
 internal data class LogEntry(val time: Long, val event: WorkspaceEvent)
 
 /** Accept only timestamps and known event codes; no provider/user strings enter the log. */
-internal fun parseLog(raw: String): List<LogEntry> = raw.take(4096).lineSequence()
+internal fun parseLog(raw: String): List<LogEntry> = raw.take(8192).lineSequence()
     .mapNotNull { line ->
         val time = line.substringBefore(':').toLongOrNull()?.takeIf { it >= 0 } ?: return@mapNotNull null
         val event = WorkspaceEvent.entries.firstOrNull { it.name == line.substringAfter(':') }

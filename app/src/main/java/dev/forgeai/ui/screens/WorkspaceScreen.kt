@@ -1,41 +1,40 @@
 package dev.forgeai.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-
-import android.os.PersistableBundle
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import dev.forgeai.workspace.*
-import kotlinx.coroutines.CancellationException
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.forgeai.workspace.MAX_ROWS
+import dev.forgeai.workspace.Preview
+import dev.forgeai.workspace.WorkspaceAccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.DateFormat
-import java.util.Date
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
+import dev.forgeai.workspace.DiffTool
 
 private class ReadTree : ActivityResultContracts.OpenDocumentTree() {
     override fun createIntent(context: Context, input: Uri?) = super.createIntent(context, input).apply {
+        putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+    }
+}
+
+/** Grants the picked tree with read or read+write persistable permissions, per user choice. */
+private class GrantTree(private val write: Boolean) : ActivityResultContracts.OpenDocumentTree() {
+    override fun createIntent(context: Context, input: Uri?) = super.createIntent(context, input).apply {
         flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+            (if (write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0) or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         putExtra(Intent.EXTRA_LOCAL_ONLY, true)
     }
 }
@@ -43,160 +42,224 @@ private class ReadTree : ActivityResultContracts.OpenDocumentTree() {
 @Composable
 fun WorkspaceScreen(modifier: Modifier = Modifier, onAnalyzeExcerpt: ((String) -> Unit)? = null) {
     val context = LocalContext.current
-    val store = remember(context) { WorkspaceStore(context.applicationContext) }
+    val access = remember(context) { WorkspaceAccess(context.applicationContext) }
     val scope = rememberCoroutineScope()
-    var ready by remember { mutableStateOf(false) }
+    var grants by remember { mutableStateOf(emptyList<WorkspaceAccess.Grant>()) }
     var busy by remember { mutableStateOf(false) }
-    var roots by remember { mutableStateOf(emptyList<Uri>()) }
-    val root = roots.firstOrNull()
-    var listing by remember { mutableStateOf<WorkspaceStore.Listing?>(null) }
-    var preview by remember { mutableStateOf<Preview?>(null) }
-    var filename by remember { mutableStateOf("") }
-    var query by remember { mutableStateOf("") }
-    var matches by remember { mutableStateOf<Int?>(null) }
     var notice by remember { mutableStateOf("") }
-    var consent by rememberSaveable { mutableStateOf(false) }
-    var awaitingPicker by rememberSaveable { mutableStateOf(false) }
-    var history by remember { mutableStateOf(emptyList<LogEntry>()) }
-    var showHistory by rememberSaveable { mutableStateOf(false) }
-    fun closePreview() { preview = null; filename = ""; query = ""; matches = null }
-    suspend fun sync() {
-        val (updated, log) = withContext(Dispatchers.IO) { store.roots() to store.history() }
-        if (roots != updated) { closePreview(); listing = null }
-        roots = updated
-        history = log
-        ready = true
-    }
+    var consentRead by rememberSaveable { mutableStateOf(false) }
+    var consentWrite by rememberSaveable { mutableStateOf(false) }
+    var awaitingPicker by rememberSaveable { mutableStateOf<String?>(null) } // "read" | "write"
+    var chosen by rememberSaveable { mutableStateOf<Int>(0) }               // index into grants
+    var listing by remember { mutableStateOf<WorkspaceAccess.Listing?>(null) }
+    var previewTarget by remember { mutableStateOf<WorkspaceAccess.Entry?>(null) }
+    var previewText by remember { mutableStateOf<Preview?>(null) }
+    var editorText by rememberSaveable { mutableStateOf("") }
+    var editorOpen by rememberSaveable { mutableStateOf(false) }
+    var showDiff by rememberSaveable { mutableStateOf(false) }
+    var newFileName by rememberSaveable { mutableStateOf("") }
+    var creatingNew by rememberSaveable { mutableStateOf(false) }
+    var history by remember { mutableStateOf(emptyList<dev.forgeai.workspace.LogEntry>()) }
+
     fun runAction(action: suspend () -> Unit) {
         if (busy) return
         busy = true
         scope.launch {
-            try {
-                notice = ""
-                action()
-                sync()
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (_: Exception) {
-                closePreview(); listing = null
-                notice = "Could not complete the action. Check folder access and use a plain UTF-8 text file."
-                withContext(Dispatchers.IO) { store.record(WorkspaceEvent.FAILED) }
-                try { sync() } catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { ready = false; roots = emptyList() }
-            } finally { busy = false }
+            try { action(); withContext(Dispatchers.IO) { history = access.history() } }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (e: Exception) { notice = e.message ?: "The action could not complete." }
+            finally { busy = false }
         }
     }
-    val picker = rememberLauncherForActivityResult(remember { ReadTree() }) { uri ->
-        val allowed = awaitingPicker
-        awaitingPicker = false
-        consent = false
-        if (uri != null && allowed) runAction { withContext(Dispatchers.IO) { store.grant(uri) } }
+
+    val grantPicker = rememberLauncherForActivityResult(remember { GrantTree(false) }) { uri ->
+        val kind = awaitingPicker; awaitingPicker = null; consentRead = false; consentWrite = false
+        if (uri != null && kind == "read") runAction { withContext(Dispatchers.IO) { access.grantRead(uri) } }
     }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val refresh by rememberUpdatedState(newValue = {
-        // The result callback, not a lifecycle callback, owns authorization.
-        if (!busy && !awaitingPicker) runAction {}
-    })
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) refresh() }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
+    val writePicker = rememberLauncherForActivityResult(remember { GrantTree(true) }) { uri ->
+        val kind = awaitingPicker; awaitingPicker = null; consentRead = false; consentWrite = false
+        if (uri != null && kind == "write") runAction { withContext(Dispatchers.IO) { access.grantReadWrite(uri) } }
     }
-    val enabled = ready && !busy && !awaitingPicker
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { grants = access.grants(); history = access.history() }
+    }
+
+    val grant = grants.getOrNull(chosen.coerceIn(0, (grants.size - 1).coerceAtLeast(0)))
     Column(modifier.verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        PageHeading("Workspace", "Inspect selected documents locally. Chat cannot run these tools.")
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (notice.isNotBlank()) Text(notice, style = MaterialTheme.typography.bodyMedium)
-        if (root == null) {
-            Panel("Before you choose a folder",
-                "Android will grant ongoing read access to the selected folder and its descendants until revoked. " +
-                "Choose a dedicated, non-sensitive folder. FORGE only lists its first $MAX_ROWS top-level entries and previews up to 8 KiB of text on request. " +
-                "No document edits, background scanning, uploads or automatic sharing with chat. The local log keeps only times and action types.")
-            Row(Modifier.fillMaxWidth().toggleable(consent, enabled, Role.Checkbox) { consent = it }
-                .heightIn(min = 48.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
+        PageHeading("Files", "Authorized folders for reading, editing and agent tasks. Each folder is granted and revoked individually.")
+
+        if (grants.isEmpty()) {
+            dev.forgeai.ui.screens.Panel("Before you choose a folder",
+                "Android will keep the permission for the selected folder until you revoke it. " +
+                "Read-only folders never receive writes. Read+write folders let FORGE AI create and edit " +
+                "real files (manually or via Agent tasks), with a diff shown and a backup of replaced versions kept in app storage. " +
+                "No other apps' private folders and no system locations are accessible, and nothing leaves the device.")
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Checkbox(checked = consent, onCheckedChange = null, enabled = enabled)
-                Text("I agree to persistent read-only access.")
+                Checkbox(checked = consentRead, onCheckedChange = { consentRead = it })
+                Text("I understand the read-only folder grant.")
             }
-            Button(enabled = enabled && consent, onClick = {
-                awaitingPicker = true
-                try { picker.launch(null) } catch (_: Exception) {
-                    awaitingPicker = false; consent = false; notice = "Folder picker unavailable."
-                }
-            }) { Text("Choose folder") }
-            if (!ready && !busy) OutlinedButton(onClick = { runAction {} }) { Text("Check access") }
+            OutlinedButton(enabled = consentRead && !busy, onClick = {
+                awaitingPicker = "read"
+                try { grantPicker.launch(null) } catch (_: Exception) { awaitingPicker = null; notice = "Folder picker unavailable." }
+            }) { Text("Grant read-only folder") }
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Checkbox(checked = consentWrite, onCheckedChange = { consentWrite = it })
+                Text("I authorize file creation and edits in the folder I am about to pick.")
+            }
+            Button(enabled = consentWrite && !busy, onClick = {
+                awaitingPicker = "write"
+                try { writePicker.launch(null) } catch (_: Exception) { awaitingPicker = null; notice = "Folder picker unavailable." }
+            }) { Text("Grant read+write folder") }
         } else {
-            Text("Authorized folder: ${store.folderName(root)}", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = enabled, onClick = { runAction {
-                    closePreview(); listing = withContext(Dispatchers.IO) { store.list(root) }
-                } }) { Text("List files") }
-                OutlinedButton(enabled = enabled, onClick = { runAction {
-                    closePreview(); listing = null
-                    withContext(Dispatchers.IO) { store.revoke(root) }
-                    consent = false; notice = "Read access revoked. Documents unchanged."
-                } }) { Text("Revoke access") }
+            val format = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+            grants.forEachIndexed { index, g ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    androidx.compose.material3.RadioButton(selected = chosen == index, onClick = { chosen = index; listing = null; previewTarget = null; editorOpen = false })
+                    Text("${g.name} · ${if (g.writable) "read+write" else "read-only"}",
+                        Modifier.weight(1f), fontFamily = FontFamily.Monospace)
+                    TextButton(enabled = !busy, onClick = { runAction {
+                        withContext(Dispatchers.IO) { access.revoke(g.root) }
+                        grants = withContext(Dispatchers.IO) { access.grants() }
+                        chosen = 0; listing = null; previewTarget = null; editorOpen = false
+                        notice = "Folder revoked. Files were not deleted."
+                    } }) { Text("Revoke") }
+                }
             }
-            val shown = preview
-            if (shown != null) {
-                Text(filename, style = MaterialTheme.typography.titleMedium)
-                Text(if (shown.clipped) "Preview clipped at 8 KiB." else "UTF-8 text preview")
+            if (grants.size > 1) Text("Selected folder: ${grant?.name}", style = MaterialTheme.typography.labelLarge)
+        }
+
+        if (grant != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = !busy, onClick = { runAction {
+                    listing = withContext(Dispatchers.IO) { access.listDir(grant.root, "", MAX_ROWS) }
+                    previewTarget = null; editorOpen = false
+                } }) { Text("List folder") }
+                if (grant.writable) {
+                    OutlinedButton(enabled = !busy, onClick = { creatingNew = true; newFileName = ""; editorText = ""; editorOpen = true; showDiff = false; previewTarget = null }) {
+                        Text("New file")
+                    }
+                }
+            }
+            listing?.let { page ->
+                Text(if (page.truncated) "First $MAX_ROWS entries (limit reached)." else "${page.entries.size} top-level entries.")
+                page.entries.forEach { entry ->
+                    if (entry.folder) {
+                        Text("· ${entry.name}/")
+                    } else OutlinedButton(enabled = !busy, onClick = { runAction {
+                        val target = entry
+                        val text = withContext(Dispatchers.IO) {
+                            try { val t = access.readText(target); dev.forgeai.workspace.Preview(t.take(8192), t.length > 8192) }
+                            catch (e: Exception) { null }
+                        }
+                        if (text == null) { notice = "Not readable as UTF-8 text or larger than the preview limit." } else {
+                            previewTarget = target; previewText = text
+                            editorText = text.text; editorOpen = false; showDiff = false
+                        }
+                    } }) { Text(entry.name) }
+                }
+            }
+            val shown = previewTarget
+            if (shown != null && previewText != null && !editorOpen) {
+                HorizontalDivider()
+                Text(shown.name, style = MaterialTheme.typography.titleMedium)
+                Text(if (previewText!!.clipped) "Preview clipped at 8 KiB." else "UTF-8 preview",
+                    style = MaterialTheme.typography.labelMedium)
                 OutlinedCard(Modifier.fillMaxWidth()) {
-                    Text(shown.text.ifEmpty { "(Empty file)" },
-                        Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState()).padding(12.dp),
+                    Text(previewText!!.text.ifEmpty { "(Empty file)" },
+                        Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()).padding(12.dp),
                         fontFamily = FontFamily.Monospace)
                 }
-                OutlinedTextField(value = query, onValueChange = { query = it.take(MAX_QUERY); matches = null },
-                    enabled = enabled, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Exact text (case-sensitive)") })
-                OutlinedButton(enabled = enabled && query.isNotEmpty(), onClick = { runAction {
-                    matches = literalMatches(shown.text, query)
-                    withContext(Dispatchers.IO) { store.record(WorkspaceEvent.SEARCH) }
-                } }) { Text("Search preview") }
-                matches?.let { Text("$it non-overlapping matches in this preview.") }
-                Text("Copying sends up to 2,000 characters to the system clipboard.")
-                Button(enabled = enabled && shown.text.isNotEmpty(), onClick = { runAction {
-                    val clip = ClipData.newPlainText("Workspace excerpt", excerpt(shown.text, 2000))
-                    clip.description.extras = PersistableBundle().apply {
-                        putBoolean("android.content.extra.IS_SENSITIVE", true)
-                    }
-                    checkNotNull(context.getSystemService(ClipboardManager::class.java)).setPrimaryClip(clip)
-                    withContext(Dispatchers.IO) { store.record(WorkspaceEvent.COPY) }
-                    notice = "Excerpt copied."
-                } }) { Text("Copy excerpt") }
                 if (onAnalyzeExcerpt != null) {
-                    Text("Place an excerpt of up to 1,200 characters in a chat draft. Chat may shorten it further. Review before sending.")
-                    OutlinedButton(enabled = enabled && shown.text.isNotEmpty(), onClick = { runAction {
-                        withContext(Dispatchers.IO) { store.record(WorkspaceEvent.DRAFT) }
-                        onAnalyzeExcerpt(excerpt(shown.text, 1200))
-                    } }) { Text("Use in Chat") }
+                    val shareable = shown.name.endsWith(".txt") || shown.name.endsWith(".md") ||
+                        shown.name.endsWith(".json") || shown.name.endsWith(".csv")
+                    OutlinedButton(enabled = !busy && shareable,
+                        onClick = { onAnalyzeExcerpt(dev.forgeai.workspace.excerpt(previewText!!.text, 1200)) }) {
+                        Text("Use in Chat")
+                    }
                 }
-                TextButton(enabled = enabled, onClick = { closePreview(); notice = "" }) { Text("Back to file list") }
-            } else listing?.let { page ->
-                Text("${page.entries.size} entries shown${if (page.more) " · limit reached" else ""}. Subfolders are not opened.")
-                page.entries.forEach { entry ->
-                    if (entry.readable) {
-                        OutlinedButton(enabled = enabled, onClick = { runAction {
-                            preview = withContext(Dispatchers.IO) { store.preview(entry) }
-                            filename = entry.name
-                        } }) { Text(entry.name) }
-                    } else Text("${entry.name} · ${if (entry.folder) "folder" else "not text"}")
+                if (grant.writable) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = !busy, onClick = { editorOpen = true; editorText = previewText!!.text; showDiff = false }) {
+                            Text("Edit")
+                        }
+                        OutlinedButton(enabled = !busy, onClick = { runAction {
+                            withContext(Dispatchers.IO) { access.exportCopy(shown, grant.root, "", "copy-of-${shown.name}") }
+                            notice = "Exported a copy as 'copy-of-${shown.name}' inside the same folder."
+                        } }) { Text("Export copy") }
+                    }
+                }
+            }
+
+            if (editorOpen && grant != null) {
+                HorizontalDivider()
+                Text(if (creatingNew) "New file in ${grant.name}" else "Editing ${shown?.name ?: ""}",
+                    style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(value = editorText, onValueChange = { editorText = it.take(1024 * 1024) },
+                    enabled = !busy && (creatingNew || grant.writable),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp),
+                    label = { Text("File content (UTF-8)") }, textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(enabled = !busy && shown != null && !creatingNew, onClick = { showDiff = !showDiff }) {
+                        Text(if (showDiff) "Hide diff" else "Show diff")
+                    }
+                    if (creatingNew) {
+                        Button(enabled = !busy && newFileName.isNotBlank() && editorText.isNotEmpty(), onClick = { runAction {
+                            val name = newFileName.trim()
+                            withContext(Dispatchers.IO) { access.createFile(grant.root, "", name, editorText.toByteArray(Charsets.UTF_8)) }
+                            creatingNew = false; editorOpen = false
+                            notice = "Created '$name' and verified the saved content."
+                            listing = withContext(Dispatchers.IO) { access.listDir(grant.root, "", MAX_ROWS) }
+                        } }) { Text("Create file") }
+                    } else {
+                        Button(enabled = !busy && shown != null, onClick = { runAction {
+                            val target = shown!!
+                            val original = previewText!!.text
+                            val bytes = editorText.toByteArray(Charsets.UTF_8)
+                            withContext(Dispatchers.IO) {
+                                access.replaceFile(target, bytes, original.toByteArray(Charsets.UTF_8))
+                            }
+                            editorOpen = false
+                            notice = "Saved '${target.name}' and verified by re-read. Previous version kept as backup."
+                        } }) { Text("Save to file") }
+                    }
+                    TextButton(enabled = !busy, onClick = { editorOpen = false; creatingNew = false }) { Text("Close") }
+                }
+                if (creatingNew) {
+                    OutlinedTextField(value = newFileName, onValueChange = { newFileName = it.take(120) },
+                        enabled = !busy, singleLine = true, label = { Text("File name (e.g. notes.md)") },
+                        modifier = Modifier.fillMaxWidth())
+                }
+                if (showDiff && shown != null) {
+                    val diff = remember(editorText, previewText) {
+                        DiffTool.unifiedText(previewText!!.text, editorText)
+                    }
+                    Text(if (diff.isEmpty()) "No differences." else "Unified diff (original → edited):",
+                        style = MaterialTheme.typography.labelLarge)
+                    OutlinedCard(Modifier.fillMaxWidth()) {
+                        Text(diff, Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(12.dp),
+                            fontFamily = FontFamily.Monospace)
+                    }
                 }
             }
         }
-        HorizontalDivider()
-        TextButton(onClick = { showHistory = !showHistory }) {
-            Text(if (showHistory) "Hide activity" else "Show activity")
+
+        if (notice.isNotBlank()) {
+            Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = { notice = "" }) { Text("Dismiss") }
         }
-        if (showHistory) {
-            Text("Recent workspace activity · last $MAX_LOG events")
-            val format = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT) }
-            if (history.isEmpty()) Text("No activity recorded.")
-            history.forEach { Text("${format.format(Date(it.time))} · ${it.event.label}") }
-            OutlinedButton(enabled = enabled && history.isNotEmpty(), onClick = { runAction {
-                withContext(Dispatchers.IO) { store.clearHistory() }
-            } }) { Text("Clear activity") }
+        HorizontalDivider()
+        TextButton(onClick = { runAction {} }) { Text("Refresh grants") }
+        Text("Recent activity · last ${dev.forgeai.workspace.MAX_LOG} events",
+            style = MaterialTheme.typography.labelLarge)
+        if (history.isEmpty()) Text("No activity recorded.")
+        val format = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+        history.forEach { entry ->
+            Text("${format.format(java.util.Date(entry.time))} · ${entry.event.label}")
         }
     }
 }

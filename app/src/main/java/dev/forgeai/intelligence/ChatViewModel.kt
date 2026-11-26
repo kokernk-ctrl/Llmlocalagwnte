@@ -136,6 +136,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application), C
         if (handle != 0L) NativeBridge.cancel(handle)
     }
 
+    /** True when the engine is idle and could serve an agent planning request. */
+    internal fun isReadyForAgent() = current.value.phase == Phase.READY && handle != 0L
+
+    /**
+     * Blocking single-shot generation for the agent planner. Called on the agent's worker
+     * thread; native begin() rejects concurrent generation, and unload invalidates the
+     * handle so a mid-plan unload simply returns null.
+     */
+    internal fun generateForAgent(prompt: ByteArray, maxTokens: Int): String? {
+        if (!isReadyForAgent()) return null
+        val epochAtStart = epoch
+        return try {
+            val reply = StringBuilder()
+            val decoder = Utf8Pieces()
+            NativeBridge.generate(handle, prompt, maxTokens, TokenSink { bytes ->
+                if (epoch == epochAtStart) reply.append(decoder.decode(bytes))
+            })
+            if (epoch != epochAtStart) return null
+            reply.append(decoder.decode(byteArrayOf(), end = true)).toString()
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
     @Synchronized internal fun unload(notice: String? = null) {
         val phase = current.value.phase
         if (phase == Phase.UNLOADING || phase == Phase.EMPTY) return

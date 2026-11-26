@@ -15,7 +15,7 @@ jobs:
   release:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -74,4 +74,4 @@ jobs:
           apk=FORGE-AI-${version}-release.apk
           gh release create "$GITHUB_REF_NAME" "release/$apk" "release/$apk.sha256" \
             --verify-tag --title "FORGE AI $version" \
-            --notes 'APK Android assinado. Chat local Qwen2 via llama.cpp e ferramentas manuais de pasta somente leitura. Não inclui pesos, execução de comandos nem agente autônomo. Android 8+ (ARM64 ou x86_64).'
+            --notes 'APK Android assinado. 0.3.0: agente de programação local com leitura e escrita reais em pasta autorizada (SAF, diff, verificação pós-gravação, checkpoints), aba Shell com comandos locais sob lista de permissões e runtime Python embutido (Chaquopy, sem Termux), além do chat local Qwen2 via llama.cpp e ferramentas manuais de pasta. Sem rede, sem root, sem pesos embutidos; execução livre de Python exige aprovação explícita. Android 8+ (ARM64 ou x86_64).'

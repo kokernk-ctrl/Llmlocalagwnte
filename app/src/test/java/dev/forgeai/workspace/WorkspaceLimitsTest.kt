@@ -55,7 +55,7 @@ class WorkspaceLimitsTest {
         var log = "0:/private/folder\n1:secret query\ninvalid:READ\n-5:READ"
         assertTrue(parseLog(log).isEmpty())
         repeat(70) { log = appendLog(log, WorkspaceEvent.READ, it.toLong()) }
-        assertEquals((69L downTo 38L).toList(), parseLog(log).map { it.time })
+        assertEquals((69L downTo 69L - MAX_LOG + 1).toList(), parseLog(log).map { it.time })
         assertFalse(log.contains("private"))
     }
 }

@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.chaquo.python")
 }
 android {
     namespace = "dev.forgeai"
@@ -11,8 +12,8 @@ android {
         applicationId = "dev.forgeai"
         minSdk = 26
         targetSdk = 33
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
         ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
             cmake { arguments += "-DANDROID_STL=c++_static" }
@@ -25,6 +26,7 @@ android {
         }
     }
     buildFeatures { compose = true }
+    testOptions { unitTests { isReturnDefaultValues = true } }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -38,6 +40,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     testImplementation("junit:junit:4.13.2")
 }

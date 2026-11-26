@@ -1,0 +1,15 @@
+Chaquopy (com.chaquo.python, version 17.2.0) is used in this build to bundle CPython
+for Android. Chaquopy is MIT licensed; the bundled target packages also carry CPython
+(Python Software Foundation License) and OpenSSL/licensing as shipped upstream.
+The Python runtime is packaged as native libraries and assets; no model weights, no
+network access (the app declares no INTERNET permission).
+
+MIT License (Chaquopy): Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished to do so, subject to
+the following conditions: the above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+Copyright holders: Malcolm Smith and Chaquopy contributors (see the upstream repository
+https://github.com/chaquo/chaquopy for the full license text).
