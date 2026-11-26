@@ -87,6 +87,19 @@ internal class ModelRegistry(context: Context) : AutoCloseable {
         } finally { db.endTransaction() }
     }
 
+    internal fun preferredReadableUri(id: Long): Uri {
+        val args = arrayOf(id.toString())
+        return store.readableDatabase.rawQuery(
+            "SELECT uri, bytes FROM models WHERE id = ? AND preferred = 1", args
+        ).use {
+            if (!it.moveToFirst()) throw ModelImportException("Select a preferred model in Model Manager.")
+            val uri = Uri.parse(it.getString(0))
+            val status = availability(uri, it.getLong(1), readGrants())
+            if (status != ModelAvailability.AVAILABLE) throw ModelImportException(status.description)
+            uri
+        }
+    }
+
     fun remove(id: Long): String {
         val db = store.writableDatabase
         val args = arrayOf(id.toString())

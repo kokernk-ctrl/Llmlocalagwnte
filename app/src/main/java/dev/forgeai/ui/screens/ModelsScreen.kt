@@ -59,7 +59,7 @@ import dev.forgeai.models.ModelEntry
         items(state.models, key = { it.id }) { entry ->
             ModelCard(entry, state.busy == null, { onPrefer(entry.id) }, { pendingRemoval = entry.id })
         }
-        item { Panel("4 GB device profile", "The registry does not load weights. For future inference, start with a small quantized model and a conservative context; file size alone does not establish memory fit.") }
+        item { Panel("4 GB device profile", "To run a model, set it as preferred and open Chat. Start with a small quantized instruct model; file size alone does not establish memory fit.") }
     }
 }
 

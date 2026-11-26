@@ -1,33 +1,22 @@
-# FORGE AI 0.1.0 · Model registry
+# FORGE AI · Local Android workstation
 
-FORGE AI is an offline Android workstation foundation. This milestone is a model inventory, **not** an inference engine or autonomous agent. It uses Kotlin and Jetpack Compose Material 3. The application declares no internet or broad storage permissions.
+FORGE AI provides an offline GGUF inventory, local Qwen text chat, and a read-only workspace. It does not require an account or API key. This release does not run commands, modify projects, or include an autonomous agent.
 
-## Install
-The signed APK from GitHub Actions is published under [GitHub Releases](https://github.com/kokernk-ctrl/Llmlocalagwnte/releases). The release and the debug build have different signing keys.
+## Install and use
 
-The locally built debug APK is `dist/FORGE-AI-0.1.0-debug.apk`. Install it with Android's package installer (allow installs from that source if prompted) or `adb install -r dist/FORGE-AI-0.1.0-debug.apk`. Package `dev.forgeai`; Android 8.0+ (API 26); target Android 13 (API 33). The APK includes AndroidX graphics support for arm64-v8a, armeabi-v7a, x86 and x86_64; there is no inference library. The debug signature is for testing, not production distribution.
+- Download the signed APK from [GitHub Releases](https://github.com/kokernk-ctrl/Llmlocalagwnte/releases). Android 8.0+ (API 26), `arm64-v8a` or `x86_64`, package `dev.forgeai`.
+- **Chat:** in **Models**, import a small Qwen2/Qwen2.5 Instruct GGUF and tap **Set preferred**. Open **Chat**, tap **Load model**, then write and send a message. Use **Stop** to interrupt generation and **Unload** to free memory and clear the chat. There is no model bundled or automatic download. The preferred model is copied into private storage when loading, so budget free space for a second copy.
+- **Files:** consent, pick one folder, list and preview UTF-8 text files, and search a preview for literal text. **Use in Chat** fills an unsent draft for review. Chat does not have access to the workspace. Revoke access in Files. The capped audit log records operation types and timestamps, not paths or content.
+- **Models:** Refresh rechecks the grant, availability and reported size. The metadata parser supports a broader set of tags than Chat does, and is not a full integrity checker. Remove unregisters a model without touching the source file.
 
-## Use
+## Build and test locally
 
-1. Open **Models** → **Import GGUF**. In Android's picker select a local `.gguf` document with a provider-reported size and persistent read support.
-2. The registry shows file size, Qwen/Llama architecture tag, declared quantization (if recognized), readability and selection. **Set preferred** changes only a stored selection; it does not load the file. **Refresh** rechecks the entry's grant, file availability and reported size, not its content hash. Re-select a document to revalidate its metadata.
-3. **Remove** asks for confirmation, removes the SQLite entry and attempts to release the persistent grant. It never deletes or modifies the original file.
-4. **Permissions** explains document access and revocation. No terms acceptance or workspace folder access is implemented.
-
-## Build locally
-
-Use JDK 21, Android SDK Platform 35 and Build Tools 35.0.0. Point `ANDROID_HOME` or untracked `local.properties` at the SDK, then run:
+Use JDK 21, Android SDK Platform 35, Build Tools 35.0.0, NDK `28.2.13676358` and CMake `3.22.1`. Point `ANDROID_HOME` or an untracked `local.properties` at the SDK.
 
 ```sh
 ./gradlew assembleDebug testDebugUnitTest lintDebug
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`. Evidence and checkpoint: `docs/milestone-0.1.md`. A smoke-test driver using ADB and UI Automator is in `scripts/smoke_api33.py`; run only on a dedicated unlocked API 33 emulator with an empty app registry.
+Artifacts: `app/build/outputs/apk/debug/app-debug.apk` and, with `assembleRelease`, `app/build/outputs/apk/release/app-release-unsigned.apk`. A debug APK does not upgrade the signed GitHub release. `scripts/verify_apk.sh` verifies a signed artifact. `scripts/smoke_native_android.sh` exercises JNI on a dedicated emulator with an externally provided test model. Notes and evidence are in `docs/milestone-0.2.md`.
 
-## Architecture and limitations
-
-- `ui/{navigation,screens,theme}` renders Dashboard, Model Manager and Permissions. `core/ForgeViewModel.kt` serializes actions and dispatches document and database I/O off the main thread.
-- `models/ModelRegistry.kt` owns the SQLite schema, persisted read grants and availability checks. The DB stores references and metadata only. Removing a registration or uninstalling the app does not remove model weights.
-- `models/GgufMetadata.kt` bounds header inspection to 64 MiB and accepts little-endian v2/v3 with `qwen2`, `qwen3` or `llama` tags. Split files are not supported. Validation walks metadata and the tensor directory, but does not verify full tensor data, model integrity or runtime compatibility. Provider reads can still be delayed, particularly for cloud documents.
-- `intelligence/LocalInference.kt` defines the future JNI integration boundary; there is no implementation, fake generation, NDK build, or bundled model. The 4 GB profile is guidance, not a tested runtime memory budget.
-- Workspace consent and audit, inference/chat, agent/tool execution, Python, project memory and continuity, multimodal input, orchestration, Model Lab and reports are later milestones and not represented by dummy screens.
+The Gradle build compiles pinned `llama.cpp` source with a checked archive hash via CMake. No model weights are downloaded by the build, embedded, or uploaded. CPU inference is local; model files can come from Android document providers. Workspace access is read-only. Workspace tools and chat do not execute any instructions from file contents.

@@ -6,12 +6,23 @@ plugins {
 android {
     namespace = "dev.forgeai"
     compileSdk = 35
+    ndkVersion = "28.2.13676358"
     defaultConfig {
         applicationId = "dev.forgeai"
         minSdk = 26
         targetSdk = 33
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
+        externalNativeBuild {
+            cmake { arguments += "-DANDROID_STL=c++_static" }
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
     buildFeatures { compose = true }
     compileOptions {

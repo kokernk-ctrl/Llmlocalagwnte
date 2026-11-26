@@ -37,7 +37,7 @@ jobs:
           manager=$sdk/cmdline-tools/12.0/bin/sdkmanager
           # sdkmanager closes stdin after accepting licenses, so `yes` can receive SIGPIPE.
           (set +o pipefail; yes | "$manager" --sdk_root="$sdk" --licenses >/dev/null)
-          "$manager" --sdk_root="$sdk" 'platforms;android-35' 'build-tools;35.0.0'
+          "$manager" --sdk_root="$sdk" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
           printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\n' "$sdk" "$sdk" >> "$GITHUB_ENV"
       - name: Build and test
         run: ./gradlew --no-daemon --console=plain testDebugUnitTest lintRelease assembleRelease
@@ -74,4 +74,4 @@ jobs:
           apk=FORGE-AI-${version}-release.apk
           gh release create "$GITHUB_REF_NAME" "release/$apk" "release/$apk.sha256" \
             --verify-tag --title "FORGE AI $version" \
-            --notes 'APK Android assinado para instalação direta. Milestone 0.1: registro GGUF offline, sem inferência local. Android 8.0 ou superior.'
+            --notes 'APK Android assinado. Chat local Qwen2 via llama.cpp e ferramentas manuais de pasta somente leitura. Não inclui pesos, execução de comandos nem agente autônomo. Android 8+ (ARM64 ou x86_64).'

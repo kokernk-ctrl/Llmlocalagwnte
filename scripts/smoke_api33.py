@@ -100,7 +100,7 @@ if not args.fixture_root:
         fixtures(Path(tmp))
 start()
 check('APK installed and Dashboard rendered on API 33')
-tap('Permissions')
+tap('Access')
 locate('Document access is scoped to the model files you select.')
 tap('Manage model access')
 locate('No models registered')

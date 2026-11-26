@@ -16,12 +16,15 @@ if grep -Ei '\.gguf$' <<< "$entries"; then
 fi
 libs=$(grep -E '^lib/.*\.so$' <<< "$entries")
 printf '%s\n' "$libs"
-grep -qx 'lib/arm64-v8a/libandroidx.graphics.path.so' <<< "$libs"
-if grep -vE '^lib/(arm64-v8a|armeabi-v7a|x86|x86_64)/libandroidx\.graphics\.path\.so$' <<< "$libs"; then
+for abi in arm64-v8a x86_64; do
+    grep -Fqx "lib/$abi/libandroidx.graphics.path.so" <<< "$libs"
+    grep -Fqx "lib/$abi/libforge_inference.so" <<< "$libs"
+done
+if grep -vE '^lib/(arm64-v8a|x86_64)/(libandroidx\.graphics\.path|libforge_inference)\.so$' <<< "$libs"; then
     echo 'Unexpected native library' >&2
     exit 1
 fi
-printf '%s\n' 'APK contains DEX, AndroidX graphics support libraries, no inference library and no GGUF files.'
+printf '%s\n' 'APK contains DEX and ARM64 / x86_64 inference libraries, with no GGUF files.'
 "$tools/apksigner" verify --verbose --print-certs "$apk"
 stat -c 'Bytes: %s' "$apk"
 sha256sum "$apk"

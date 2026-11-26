@@ -11,12 +11,13 @@ import androidx.compose.ui.unit.dp
 import dev.forgeai.core.RegistryState
 import dev.forgeai.models.ModelAvailability
 
-@Composable internal fun DashboardScreen(state: RegistryState, openModels: () -> Unit, modifier: Modifier) {
+@Composable internal fun DashboardScreen(state: RegistryState, openModels: () -> Unit, openChat: () -> Unit, modifier: Modifier) {
     OverviewPage(modifier) {
         PageHeading("Dashboard", "Your offline model inventory.")
         Panel("Model registry", "${state.models.size} registered · ${state.models.count { it.availability == ModelAvailability.AVAILABLE }} readable")
         Panel("Preferred model", state.models.firstOrNull { it.selected }?.name ?: "None selected")
-        Panel("Inference", "Not installed in 0.1. Files can be registered and inspected; no model is loaded or run.")
+        Panel("Local Chat", "Load a small Qwen2-family instruct GGUF to generate text offline. Chat does not execute tools.")
+        Button(onClick = openChat) { Text("Open Chat") }
         Button(onClick = openModels) { Text("Open Model Manager") }
     }
 }
@@ -24,9 +25,9 @@ import dev.forgeai.models.ModelAvailability
 @Composable internal fun AccessScreen(state: RegistryState, openModels: () -> Unit, modifier: Modifier) {
     OverviewPage(modifier) {
         PageHeading("Permissions", "Document access is scoped to the model files you select.")
-        Panel("Model files", "Import grants FORGE AI persistent read access to that one file. The app stores its reference and metadata locally. It does not copy the weights or write to the document.")
+        Panel("Model files", "Import grants persistent read access to one file. Chat stages a temporary private copy while a model is loaded. FORGE AI does not write to the original document.")
         Panel("Revoking access", "Remove its registration in Model Manager to release the read grant without deleting the file. If access is revoked elsewhere, use Refresh to update its status.")
-        Panel("Workspace access", "Not available in this milestone. No folder grants, broad storage permissions, workspace terms acceptance or workspace audit log are in use.")
+        Panel("Workspace access", "Use Files to grant read-only access to one folder, review file activity, or revoke access. Chat does not read your workspace automatically.")
         Text("${state.models.count { it.availability == ModelAvailability.AVAILABLE }} readable models",
             style = MaterialTheme.typography.labelLarge, fontFamily = FontFamily.Monospace)
         OutlinedButton(onClick = openModels) { Text("Manage model access") }
