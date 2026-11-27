@@ -210,7 +210,10 @@ fun WorkspaceScreen(modifier: Modifier = Modifier, onAnalyzeExcerpt: ((String) -
                     if (creatingNew) {
                         Button(enabled = !busy && newFileName.isNotBlank() && editorText.isNotEmpty(), onClick = { runAction {
                             val name = newFileName.trim()
-                            withContext(Dispatchers.IO) { access.createFile(grant.root, "", name, editorText.toByteArray(Charsets.UTF_8)) }
+                            withContext(Dispatchers.IO) {
+                                access.createFile(grant.root, "", name, editorText.toByteArray(Charsets.UTF_8),
+                                    dev.forgeai.agent.FileKinds.mimeFor(name))
+                            }
                             creatingNew = false; editorOpen = false
                             notice = "Created '$name' and verified the saved content."
                             listing = withContext(Dispatchers.IO) { access.listDir(grant.root, "", MAX_ROWS) }

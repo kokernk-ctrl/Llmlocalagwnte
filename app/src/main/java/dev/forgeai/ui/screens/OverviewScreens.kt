@@ -11,29 +11,13 @@ import androidx.compose.ui.unit.dp
 import dev.forgeai.core.RegistryState
 import dev.forgeai.models.ModelAvailability
 
-@Composable internal fun DashboardScreen(state: RegistryState, openModels: () -> Unit, openChat: () -> Unit,
-                                          openAgent: () -> Unit, modifier: Modifier) {
-    OverviewPage(modifier) {
-        PageHeading("Dashboard", "Offline local workstation: models, chat, agent with real file writes, shell and Python.")
-        Panel("Model registry", "${state.models.size} registered · ${state.models.count { it.availability == ModelAvailability.AVAILABLE }} readable")
-        Panel("Preferred model", state.models.firstOrNull { it.selected }?.name ?: "None selected")
-        Panel("Local Chat", "Load a small Qwen2-family instruct GGUF to generate text offline.")
-        Panel("Agent", "Plans with the local model, then lists, reads, creates and edits real files inside an authorized folder, verifies writes by re-read and runs whitelisted local checks. Review or auto-apply modes; checkpoints survive restarts.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = openChat) { Text("Open Chat") }
-            Button(onClick = openAgent) { Text("Open Agent") }
-        }
-        OutlinedButton(onClick = openModels) { Text("Open Model Manager") }
-    }
-}
-
 @Composable internal fun AccessScreen(state: RegistryState, openModels: () -> Unit, modifier: Modifier) {
     OverviewPage(modifier) {
         PageHeading("Permissions", "All access is scoped to documents you pick in the Android file picker.")
-        Panel("Model files", "Import grants persistent read access to one file. Chat stages a temporary private copy while a model is loaded. FORGE AI does not write to the original model document.")
+        Panel("Model files", "Import grants persistent read access to one file. The chat engine stages a temporary private copy while a model is loaded. FORGE AI does not write to the original model document.")
         Panel("Revoking access", "Remove its registration in Model Manager to release the read grant without deleting the file. If access is revoked elsewhere, use Refresh to update its status.")
         Panel("Workspace folders", "Files grants each folder individually: read-only or read+write, revoked separately and re-checked on every sensitive operation. Write operations keep a backup of replaced files in app storage; SAF replacement is not atomic and the app reports that limitation instead of claiming otherwise.")
-        Panel("Agent tasks", "The agent can only touch the folder chosen for the task, only with the budgets shown in the Agent tab, and never touches other apps' private data. After revocation or cancellation no new operations start; started writes are reported.")
+        Panel("Agent conversation", "The agent works inside the chat on the folder you select in the header, with explicit budgets. Proposed changes appear as diffs in the conversation; in review mode nothing is written until you approve. The storage provider may store a document under a slightly different name — the agent tracks and shows the real name. After revocation or cancellation no new operations start; started writes are reported.")
         Text("${state.models.count { it.availability == ModelAvailability.AVAILABLE }} readable models",
             style = MaterialTheme.typography.labelLarge, fontFamily = FontFamily.Monospace)
         OutlinedButton(onClick = openModels) { Text("Manage model access") }

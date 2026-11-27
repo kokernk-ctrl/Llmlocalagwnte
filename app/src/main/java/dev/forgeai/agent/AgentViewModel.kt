@@ -4,24 +4,21 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.forgeai.shell.ShellPolicy
-import dev.forgeai.shell.ShellRunner
 import dev.forgeai.workspace.WorkspaceAccess
 import dev.forgeai.workspace.WorkspaceMirror
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-internal data class ShellLogEntry(val command: String, val args: List<String>, val result: ShellRunner.Result)
+internal data class ShellLogEntry(val command: String, val args: List<String>,
+                                  val result: dev.forgeai.shell.ShellRunner.Result)
 
-/** Shared singletons for workspace-backed features (agent, shell, editor, python tools). */
+/** Shared singletons for workspace-backed features (chat agent, shell, python tools). */
 class Workspaces(app: Application) {
     val access = WorkspaceAccess(app)
     val mirror = WorkspaceMirror(app)
     val checkpoints = CheckpointStore(app)
-    private val runner = ShellRunner()
 
     companion object {
         @Volatile private var instance: Workspaces? = null
@@ -31,48 +28,124 @@ class Workspaces(app: Application) {
     }
 }
 
-class AgentViewModel(app: Application) : AndroidViewModel(app) {
+/**
+ * Owns the conversation agent engine and the session settings shown in the chat header:
+ * active model readiness, active folder and edit mode. The engine runs on its own
+ * worker; every state change is checkpointed by the engine itself.
+ */
+class ChatAgentViewModel(app: Application) : AndroidViewModel(app) {
     private val ws = Workspaces.get(app)
-    @Volatile private var planHook: ((String, Int) -> String?)? = null
-    private val planProvider: () -> AgentController.PlanSource? = {
-        planHook?.let { hook ->
-            object : AgentController.PlanSource {
-                override fun generate(prompt: String, maxTokens: Int): String? = hook(prompt, maxTokens)
-            }
-        }
-    }
-    internal val controller = AgentController(ws.access, ws.mirror, ws.checkpoints, planProvider)
+
+    @Volatile private var modelHook: ((String, Int) -> String?)? = null
+    @Volatile private var modelReady: () -> Boolean = { false }
+
+    val engine = AgentEngine(
+        fs = SafFileSystem(ws.access),
+        mirror = RealMirror(app, ws.mirror),
+        checks = WhitelistedChecks(),
+        py = BundledPython(app),
+        model = LoadedModel { prompt, tokens -> modelHook?.invoke(prompt, tokens) },
+        store = ws.checkpoints,
+    )
+
+    val state = engine.state
     private val grants = MutableStateFlow(emptyList<WorkspaceAccess.Grant>())
-    val state = controller.state
     val folderGrants = grants.asStateFlow()
 
-    /** Wire the chat engine as the planning source when a model is loaded. */
-    fun bindChatHook(hook: (String, Int) -> String?) { planHook = hook }
+    private val prefs = getApplication<Application>().getSharedPreferences("chat_agent", android.content.Context.MODE_PRIVATE)
+    private val modeFlow = MutableStateFlow(
+        runCatching { AgentMode.valueOf(prefs.getString("mode", AgentMode.REVIEW.name)!!) }
+            .getOrDefault(AgentMode.REVIEW))
+    val mode = modeFlow.asStateFlow()
+    private val folderFlow = MutableStateFlow<String?>(prefs.getString("folder", null))
+    val selectedFolder = folderFlow.asStateFlow()
+
+    private val draftFlow = MutableStateFlow("")
+    val draft = draftFlow.asStateFlow()
 
     init { refresh() }
 
+    /** Wired by the app shell: the loaded local model becomes the conversation driver. */
+    fun bindModel(hook: (String, Int) -> String?, ready: () -> Boolean) {
+        modelHook = hook; modelReady = ready
+    }
+
     fun refresh() {
-        viewModelScope.launch(Dispatchers.IO) { grants.value = ws.access.grants() }
+        viewModelScope.launch(Dispatchers.IO) {
+            val live = ws.access.grants()
+            grants.value = live
+            val keep = folderFlow.value
+            if (keep != null && live.none { it.root.toString() == keep }) {
+                folderFlow.value = null
+                prefs.edit().remove("folder").apply()
+            }
+        }
     }
 
-    fun start(objective: String, root: Uri, mode: AgentMode, planFromModel: Boolean) {
-        val clean = objective.trim()
-        if (clean.isEmpty()) return
-        controller.start(AgentConfig(clean, mode, planFromModel = planFromModel), root)
-        refresh()
+    fun editDraft(text: String) { if (text.length <= 4000) draftFlow.value = text }
+    fun setDraft(text: String) { draftFlow.value = text }
+
+    fun setMode(m: AgentMode) {
+        if (engine.isBusy()) return
+        modeFlow.value = m
+        prefs.edit().putString("mode", m.name).apply()
     }
 
-    fun approve() = controller.approvePendingWrites()
-    fun cancel() = controller.cancel()
-    fun interruptedList(): List<CheckpointStore.SavedTask> = ws.checkpoints.list()
-        .filter { it.state.interruptedLike || it.state.phase == AgentPhase.DONE }
-        .sortedByDescending { it.state.startedAt }
-    fun deleteTask(id: Long) = ws.checkpoints.delete(id)
+    fun selectFolder(rootId: String) {
+        if (engine.isBusy()) return
+        folderFlow.value = rootId
+        prefs.edit().putString("folder", rootId).apply()
+    }
+
+    fun grantPicked(uri: Uri, write: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                if (write) ws.access.grantReadWrite(uri) else ws.access.grantRead(uri)
+            }
+            val live = ws.access.grants()
+            grants.value = live
+            if (write || live.any { it.root.toString() == uri.toString() }) {
+                folderFlow.value = uri.toString()
+                prefs.edit().putString("folder", uri.toString()).apply()
+            }
+        }
+    }
+
+    fun revokeFolder(rootId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ws.access.revoke(Uri.parse(rootId)) }
+            refresh()
+        }
+    }
+
+    /** Sends one message from the composer: starts (or continues) the agent conversation. */
+    fun send(text: String) {
+        val clean = text.trim()
+        if (clean.isEmpty() || engine.isBusy()) return
+        draftFlow.value = ""
+        val useModel = modelReady()
+        val folder = folderFlow.value ?: ""
+        engine.start(EngineConfig(objective = clean, mode = modeFlow.value, rootId = folder,
+            useModel = useModel))
+    }
+
+    fun approve(writeId: Int) = engine.approve(writeId)
+    fun refuse(writeId: Int) = engine.refuse(writeId)
+    fun cancel() = engine.cancel()
+    fun savedTasks(): List<SavedTask> = engine.savedTasks()
+    fun showCheckpoint(id: Long) = engine.showCheckpoint(id)
+    fun deleteTask(id: Long) = engine.deleteTask(id)
+    fun clearConversation() = engine.clearConversation()
+
+    override fun onCleared() {
+        engine.shutdown()
+        super.onCleared()
+    }
 }
 
 class ShellViewModel(app: Application) : AndroidViewModel(app) {
     private val ws = Workspaces.get(app)
-    private val runner = ShellRunner()
+    private val runner = dev.forgeai.shell.ShellRunner()
     internal val logs = MutableStateFlow(emptyList<ShellLogEntry>())
     internal val running = MutableStateFlow(false)
     internal val folderGrants = MutableStateFlow(emptyList<WorkspaceAccess.Grant>())
@@ -91,7 +164,7 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val result = if (root == null) {
-                    ShellRunner.Result(command, args, "", "", false, false, null, false, false, 0, false,
+                    dev.forgeai.shell.ShellRunner.Result(command, args, "", "", false, false, null, false, false, 0, false,
                         "Select an authorized folder first; commands run on its working copy.")
                 } else {
                     val access = ws.access
@@ -99,9 +172,8 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
                     mirrorDir = dir
                     val entries = runCatching { access.listTree(root) }.getOrDefault(emptyList())
                     ws.mirror.syncIn(access, root, entries.filter { !it.folder }, dir)
-                    // Validation happens inside run(); the audit event covers user-initiated runs.
                     access.record(dev.forgeai.workspace.WorkspaceEvent.SHELL)
-                    runner.run(ShellPolicy.Policy.USER, dir, command, args,
+                    runner.run(dev.forgeai.shell.ShellPolicy.Policy.USER, dir, command, args,
                         timeoutMs = timeoutSec.coerceIn(1, 120).toLong() * 1000)
                 }
                 logs.value = logs.value + ShellLogEntry(command, args, result)
@@ -113,6 +185,6 @@ class ShellViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancel() = runner.cancel()
 
-    fun allowedCommands(): List<String> = ShellPolicy.commandsFor[ShellPolicy.Policy.USER]!!.keys.toList()
+    fun allowedCommands(): List<String> = dev.forgeai.shell.ShellPolicy.commandsFor[dev.forgeai.shell.ShellPolicy.Policy.USER]!!.keys.toList()
         .sorted()
 }

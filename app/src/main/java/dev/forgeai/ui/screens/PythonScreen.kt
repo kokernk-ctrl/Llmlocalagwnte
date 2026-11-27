@@ -14,15 +14,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import dev.forgeai.agent.AgentViewModel
 import dev.forgeai.python.PythonHost
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Manual Python controls; the agent can also invoke these tools inside the chat. */
 @Composable
-internal fun PythonScreen(viewModel: AgentViewModel, modifier: Modifier = Modifier) {
+internal fun PythonScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var result by remember { mutableStateOf<PythonHost.Result?>(null) }
